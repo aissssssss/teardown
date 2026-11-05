@@ -36,7 +36,7 @@ export function runLive() {
   const style = document.createElement('style');
   style.textContent = CSS(top);
   document.head.appendChild(style);
-  document.title = 'CM-8 coil tattoo machine';
+  document.title = 'CM-8 Coil Tattoo Machine';
   const app = document.getElementById('app');
   const canvas = document.createElement('canvas');
   canvas.id = 'gl';
