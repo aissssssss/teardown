@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Apollonian Universe VJ</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}canvas{display:block;height:100vh;width:auto;margin:0 auto}</style>
+</head><body><canvas id="c" width="1080" height="1920"></canvas><script>
+// APOLLONIAN UNIVERSE: a closed world of spheres inside spheres. Space is folded into a repeating cell and inverted
+// in a sphere 8 times (p = -1 + 2*fract(p/2 + 1/2); p *= s / |p|^2); the distance to the result is ray-marched. The
+// orbit of each point colours it: pink pearls, gold arches, violet lattice. The camera drifts through the chambers,
+// the inversion strength breathes over the phrase and pulses on the kick, so the whole universe morphs to the beat.
+const BPM = 136, T0 = 0.046, DURATION = 57.8;
+window.DURATION = DURATION;
+const FRAG = `#version 300 es
+precision highp float;
+uniform vec2 R; uniform float T, B; out vec4 o;
+#define TAU 6.2831853
+vec4 orb;
+float map(vec3 p, float s){
+  float sc = 1.0; orb = vec4(1000.0);
+  for (int i = 0; i < 8; i++) {
+    p = -1.0 + 2.0 * fract(0.5 * p + 0.5);
+    float r2 = dot(p, p);
+    orb = min(orb, vec4(abs(p), r2));
+    float k = s / r2; p *= k; sc *= k;
+  }
+  return 0.25 * abs(p.y) / sc;
+}
+void main(){
+  vec2 uv = (2.0 * gl_FragCoord.xy - R) / R.y;
+  float kick = exp(-fract(B) * 6.0);
+  float s = 1.12 + 0.12 * sin(B * TAU / 64.0) + 0.025 * kick;           // the universe breathes and pulses
+  float tm = T * 0.22;
+  vec3 ro = vec3(2.8 * cos(0.1 + 0.33 * tm), 0.4 + 0.3 * cos(0.37 * tm), 2.8 * cos(0.5 + 0.35 * tm));
+  vec3 ta = vec3(1.9 * cos(1.2 + 0.41 * tm), 0.4 + 0.1 * cos(0.27 * tm), 1.9 * cos(2.0 + 0.38 * tm));
+  float rl = 0.25 * cos(0.13 * T);
+  vec3 cw = normalize(ta - ro), cu = normalize(cross(cw, vec3(sin(rl), cos(rl), 0.0))), cv = cross(cu, cw);
+  vec3 rd = normalize(uv.x * cu + uv.y * cv + 1.6 * cw);
+  float t = 0.01, h;
+  for (int i = 0; i < 140; i++) { h = map(ro + rd * t, s); if (h < 0.00035 * t || t > 12.0) break; t += h; }
+  vec3 col = vec3(0.0);
+  if (t < 12.0) {
+    vec3 p = ro + rd * t;
+    vec4 tr = orb;
+    vec2 e = vec2(1.0, -1.0) * 0.0004 * t;
+    vec3 n = normalize(e.xyy * map(p + e.xyy, s) + e.yyx * map(p + e.yyx, s) + e.yxy * map(p + e.yxy, s) + e.xxx * map(p + e.xxx, s));
+    // colour from the orbit: violet lattice, pink pearls, gold arches; hues drift on the beat
+    vec3 pink = vec3(1.0, 0.25, 0.7), gold = vec3(1.0, 0.82, 0.15), vio = vec3(0.35, 0.12, 0.75);
+    float hsh = 0.5 + 0.5 * sin(B * TAU / 32.0);
+    col = mix(pink, gold, pow(clamp(1.0 - 3.0 * tr.y, 0.0, 1.0), 4.0));
+    col = mix(col, vio, pow(clamp(1.0 - 2.0 * tr.z, 0.0, 1.0), 6.0));
+    col = mix(col, mix(pink, vec3(0.2, 0.9, 1.0), hsh), pow(clamp(1.0 - 1.6 * tr.x, 0.0, 1.0), 10.0));
+    float ao = clamp(tr.w * 2.0, 0.0, 1.0);
+    vec3 L = normalize(vec3(0.6, 0.8, -0.3));
+    float dif = clamp(dot(n, L), 0.0, 1.0), sky = 0.5 + 0.5 * n.y;
+    float spe = pow(clamp(dot(reflect(rd, n), L), 0.0, 1.0), 24.0);
+    col *= (0.45 + 1.3 * dif) * (0.4 + 0.6 * ao) + 0.35 * sky * ao;
+    col += spe * 0.5 * ao * (1.0 + kick);
+    col *= exp(-0.12 * t);                                             // depth haze into the chambers
+  }
+  col = pow(clamp(col, 0.0, 1.0), vec3(0.8));
+  col *= 1.0 - 0.35 * smoothstep(0.5, 1.6, length(uv * vec2(1.2, 1.0)));
+  o = vec4(col, 1.0);
+}`;
+const gl = document.getElementById('c').getContext('webgl2', {preserveDrawingBuffer: true});
+const sh = (t, src) => { const x = gl.createShader(t); gl.shaderSource(x, src); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+const pr = gl.createProgram();
+gl.attachShader(pr, sh(gl.VERTEX_SHADER, '#version 300 es\nin vec2 v;void main(){gl_Position=vec4(v,0,1);}'));
+gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(pr); gl.useProgram(pr);
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+const draw = (t) => {
+  gl.viewport(0, 0, 1080, 1920);
+  gl.uniform2f(gl.getUniformLocation(pr, 'R'), 1080, 1920);
+  gl.uniform1f(gl.getUniformLocation(pr, 'T'), t);
+  gl.uniform1f(gl.getUniformLocation(pr, 'B'), ((t - T0) * BPM) / 60);
+  gl.drawArrays(gl.TRIANGLES, 0, 3); gl.finish();
+};
+window.seek = draw;
+if (location.search.includes('render')) draw(0);
+else { const t0 = performance.now(); const f = (n) => { draw(((n - t0) / 1000) % DURATION); requestAnimationFrame(f); }; requestAnimationFrame(f); }
+window.READY = true;
+</script></body></html>
