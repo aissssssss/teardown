@@ -66,7 +66,23 @@ float uMix;   // 0 = A, 1 = B (set in main)
 vec3 P(int k){ return mix(palA(k), palB(k), uMix); }
 
 // ------------------------------------------------------------ one tunnel tile, local coords f in [-0.5, 0.5]
+float tri(float x){ return abs(fract(x) - 0.5) * 4.0 - 1.0; }
+// speeds that all divide the 24-beat loop: 1/6, 1/3, 1/2, 1 and 2 cycles per 4 beats
+float spd(float h){ return h < 0.2 ? 1.0 / 6.0 : h < 0.4 ? 1.0 / 3.0 : h < 0.6 ? 0.5 : h < 0.85 ? 1.0 : 2.0; }
+vec2 moveTile(vec2 f, vec2 id, float beats){
+  float hm = hash(id + 31.0);
+  float sp = spd(hash(id + 47.0));
+  float ph = beats * 0.25 * sp + hash(id + 5.0);
+  int m = int(hm * 5.0);
+  if (m == 0) f.x += 0.13 * tri(ph * 2.0);                       // zigzag
+  else if (m == 1) f.y += 0.13 * sin(ph * TAU);                  // up and down
+  else if (m == 2) f.x += 0.13 * sin(ph * TAU);                  // left and right
+  else if (m == 3) f = rot(ph * TAU * (hash(id + 9.0) < 0.5 ? 1.0 : -1.0)) * f;   // spin on its own axis
+  else f /= 0.78 + 0.22 * sin(ph * TAU);                         // throb
+  return f;
+}
 vec3 tile(vec2 f, vec2 id, float beats, float kick){
+  f = moveTile(f, id, beats);
   float h = hash(id);
   float h2 = hash(id + 17.0);
   int type = int(h * 5.0);
@@ -101,6 +117,8 @@ vec3 tile(vec2 f, vec2 id, float beats, float kick){
 // ------------------------------------------------------------ one almond eye, local coords f (x along the ring)
 vec3 eye(vec2 f, vec2 id, float beats, float kick, float t){
   float h = hash(id + 3.3);
+  f.y += (h < 0.5 ? 0.06 : 0.0) * sin(beats * PI * 0.5 * spd(hash(id + 8.0)) + h * TAU);
+  f.x += (h >= 0.5 ? 0.08 : 0.0) * tri(beats * 0.25 * spd(hash(id + 2.0)) + h);
   // blink: each eye shuts briefly once every 8 beats at its own time
   float bt = fract(beats / 8.0 + h);
   float open = 1.0 - smoothstep(0.0, 0.03, bt) * (1.0 - smoothstep(0.03, 0.07, bt));
@@ -236,7 +254,7 @@ void main(){
     float life = fract(hash1(fi * 3.3) + 2.0 * t / uLoop);       // two flights per loop
     float rad = 0.03 + 0.62 * life * life;
     vec2 dir = vec2(cos(a0), sin(a0));
-    vec2 cp = dir * rad;
+    vec2 cp = dir * rad + vec2(-dir.y, dir.x) * 0.035 * life * tri(life * 6.0 + fi * 0.3);
     vec2 lp = w - cp;
     float along = dot(lp, dir);
     float across = dot(lp, vec2(-dir.y, dir.x));
@@ -255,7 +273,7 @@ void main(){
   for (int i = 0; i < 5; i++) {
     float fi = float(i);
     float a = TAU * (hash1(fi + 2.0) + t / uLoop * (mod(fi, 2.0) < 1.0 ? 1.0 : -1.0));
-    vec2 op = vec2(cos(a) * (0.28 + 0.05 * fi), sin(a * 2.0 + fi) * 0.4);
+    vec2 op = vec2(cos(a) * (0.28 + 0.05 * fi) + 0.05 * tri(beats * 0.25 * spd(hash1(fi + 6.0)) + fi), sin(a * 2.0 + fi) * 0.4);
     vec2 lp = (w - op) * vec2(1.0, 1.35);
     float r = length(lp);
     float R = 0.035 + 0.02 * hash1(fi + 9.0);
@@ -268,49 +286,42 @@ void main(){
   // ---------------------------------------------------------- serpents: tubes of diamond scales
   for (int s = 0; s < NS; s++) {
     vec4 hit = serpentHit(w, s);
-    float u = hit.w;                                   // 0 tail (in the vortex) .. 1 head (outside)
-    float wid = mix(0.005, 0.042, pow(u, 0.8)) * (1.0 + 0.12 * kick);
-    // a rounded head
-    float headK = smoothstep(0.93, 1.0, u);
-    wid *= 1.0 + 0.35 * headK * (1.0 - smoothstep(0.985, 1.0, u) * 0.9);
-    float v = hit.x / wid;                             // 0 spine .. 1 flank
+    float u = hit.w;                                   // 0 tail .. 1 head
+    float wid = 0.046 * pow(max(sin(PI * u), 0.0), 0.75) * (1.0 + 0.1 * kick) + 0.0015;
+    float v = hit.x / wid;                             // 0 axis .. 1 silhouette
     if (v < 1.0) {
-      float vs = v * hit.z;                            // signed across
-      float nz = sqrt(max(0.0, 1.0 - v * v));          // tube normal
+      float vs = v * hit.z;
+      float nz = sqrt(max(0.0, 1.0 - v * v));
       vec3 n = normalize(vec3(vs, 0.0, nz));
-      float diff = 0.12 + 0.88 * max(0.0, dot(n, normalize(vec3(-0.4, 0.5, 0.8))));
-      // scale lattice in (arclength, around-the-tube) coordinates, diamonds
-      float S = hit.y / max(wid, 0.004) * 1.9;
-      float A = asin(clamp(vs, -1.0, 1.0)) / (PI * 0.5) * 2.2;
-      vec2 sc = vec2(S + A, S - A) * 0.7071;
-      vec2 sf = fract(sc) - 0.5;
-      vec2 sid = floor(sc);
-      float edge = max(abs(sf.x), abs(sf.y));
-      // the light wave along the body, and the scales breathing on the beat
-      float wave = 0.5 + 0.5 * sin(S * 0.22 - beats * PI);
-      float breathe = 0.82 + 0.18 * kick;
-      float scale = 1.0 - smoothstep(0.3 * breathe, 0.4 * breathe, edge);
-      vec3 rim = mix(P(1), P(2), wave);
-      vec3 core = P(3) * (0.8 + 0.4 * wave);
-      vec3 sc3 = mix(rim, core, 1.0 - smoothstep(0.02, 0.26, edge));
-      sc3 *= 0.55 + 0.75 * wave;
-      // a zigzag along the spine, marching forward
-      float zig = abs(fract(S * 0.17 - beats * 0.5) - 0.5) * 2.0;
-      float spine = line(vs - (zig - 0.5) * 0.7, 0.13) * (1.0 - smoothstep(0.75, 0.95, v));
-      vec3 sCol = sc3 * scale * diff;
-      sCol += mix(P(2), vec3(1.0), 0.5) * spine * (0.6 + 0.6 * kick);
-      // specular sheen
-      sCol += vec3(1.0) * pow(max(0.0, dot(n, normalize(vec3(-0.3, 0.4, 1.0)))), 24.0) * 0.35 * scale;
-      // eyes on the head
-      if (headK > 0.0) {
-        float ex = 1.0 - smoothstep(0.0, 0.15, abs(abs(vs) - 0.45) + abs(u - 0.975) * 25.0 - 0.1);
-        sCol = mix(sCol, mix(P(3), vec3(1.0), 0.6) * (1.3 + kick) * (0.6 + 0.4 * uLook[s]), ex);
-      }
-      float a = 1.0 - smoothstep(0.88, 1.0, v);
-      col = mix(col, sCol, a * smoothstep(0.08, 0.3, u));
+      float diff = 0.15 + 0.85 * max(0.0, dot(n, normalize(vec3(-0.4, 0.5, 0.8))));
+      // coordinates on the cylinder: along the body, and round it (asin unrolls the curved surface)
+      float S = hit.y / 0.046 * 3.2;
+      float A = asin(clamp(vs, -1.0, 1.0)) / (PI * 0.5) * 2.6;
+      // the body rolls on its own axis: the hexagons slide round it, each serpent at its own speed
+      A += beats / 24.0 * 10.4 * (float(s) + 1.0) * (s == 1 ? -1.0 : 1.0);
+      // hexagon lattice
+      vec2 hp = vec2(S, A);
+      vec2 rr2 = vec2(1.0, 1.7320508);
+      vec2 ha = mod(hp, rr2) - rr2 * 0.5;
+      vec2 hb = mod(hp - rr2 * 0.5, rr2) - rr2 * 0.5;
+      vec2 gv = dot(ha, ha) < dot(hb, hb) ? ha : hb;
+      vec2 hid = floor((hp - gv) * 4.0 + 0.5);
+      float hd = max(dot(abs(gv), vec2(0.5, 0.8660254)), abs(gv.x));   // 0.5 at the edge
+      float hh = hash(hid + float(s) * 13.0);
+      // every hexagon pulses on its own clock, a light wave runs head to tail on the beat
+      float own = 0.5 + 0.5 * sin(beats * PI * 0.5 * spd(hh) * 2.0 + hh * TAU);
+      float wave = pow(0.5 + 0.5 * sin(S * 0.18 + beats * PI), 3.0);
+      float glowK = 0.35 + 0.65 * max(own * own, wave);
+      float cellIn = 1.0 - smoothstep(0.36, 0.42, hd);
+      float rimL = line(hd - 0.36, 0.035);
+      float core = 1.0 - smoothstep(0.0, 0.22 + 0.06 * own, hd);
+      vec3 hc = hh < 0.4 ? P(3) : hh < 0.75 ? P(1) : P(2);
+      vec3 sCol = (hc * 0.25 * cellIn + hc * rimL * 1.1 + mix(hc, vec3(1.0), 0.45) * core * 0.9) * glowK * diff;
+      sCol += vec3(1.0) * pow(max(0.0, dot(n, normalize(vec3(-0.3, 0.4, 1.0)))), 28.0) * 0.3;
+      float a = 1.0 - smoothstep(0.85, 1.0, v);
+      col = mix(col, sCol, a);
     } else {
-      // a soft glow round the body
-      col += P(2) * exp(-(hit.x - wid) * 90.0) * 0.12 * smoothstep(0.05, 0.4, u);
+      col += P(2) * exp(-(hit.x - wid) * 110.0) * 0.1 * sin(PI * u);
     }
   }
 
@@ -347,7 +358,7 @@ function paths(t) {
       const th = th0 - dir * (1 - u) * turns * Math.PI * 2;
       const R = (0.62 + 0.06 * s) * breath * Math.exp(-(1 - u) * 2.9);
       // slither: a sideways wave travelling down the body
-      const sl = 0.06 * Math.pow(u, 1.2) * Math.sin(u * 15 - (Math.PI * 2 * 6 * t) / L + s * 2);
+      const sl = 0.085 * Math.sin(Math.PI * u) * Math.sin(u * 13 - (Math.PI * 2 * [4, 6, 10][s] * t) / L + s * 2);
       const r = R * (1 + sl * 2.2);
       const x = Math.cos(th) * r;
       const y = Math.sin(th) * r;
