@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Serpent Vortex VJ</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  canvas{display:block;height:100vh;width:auto;margin:0 auto;aspect-ratio:9/16}
+</style>
+</head>
+<body>
+<canvas id="c" width="1080" height="1920"></canvas>
+<script>
+// SERPENT VORTEX: a 9:16 VJ loop locked to 145 BPM. 6 bars = 24 beats = 9.93 s; every motion completes a whole number
+// of its own cycles in that time, so the loop is seamless.
+//
+// Camera: a strong fisheye bulge, a vortex that twists the centre, a slow roll, a punch-in on every kick, a shake and
+// a twist reversal on the drop. Everything below is seen through that lens.
+//   tunnel     a mosaic of glyph tiles rushing outward: square rings, scrolling chevrons, blinking dot quads, pulsing
+//              target rings, diamonds. Every tile has its own phase; the kick lights a wave through them
+//   eye rings  bands of almond eyes in the tunnel: each blinks on its own schedule, the iris turns its colours, the
+//              pupil dilates on the kick and follows a slow gaze
+//   contours   flowing contour stripes in the gaps, like carved wood grain bending round the vortex
+//   streaks    light streaks flying out of the centre
+//   serpents   three tubes of diamond scales spiralling into the vortex: the body slithers, a light wave runs along
+//              the scales, a zigzag rides the spine, the scales breathe on the beat, the head looks with glowing eyes
+//   comets     teardrop comets with tails shot out of the centre
+//   orbs       concentric target orbs drifting and pulsing
+// Structure: bars 1-3 violet/blue, bar 4 builds (twist winds up, 16th strobe on the last beat), bar 5 drops (silver
+// flash, shake, fire palette, twist reverses), bar 6 rides it and crossfades home for the loop.
+const BPM = 145;
+const BEATS = 24;
+const DURATION = BEATS * 60 / BPM;
+window.DURATION = DURATION;
+const NS = 3;      // serpents
+const NP = 44;     // points per serpent path
+
+const VERT = `#version 300 es
+in vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }`;
+
+const FRAG = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform float uT, uLoop, uBeat;
+uniform vec2 uPath[${NS * NP}];
+uniform float uArc[${NS * NP}];
+uniform float uLook[${NS}];
+out vec4 o;
+#define PI 3.14159265
+#define TAU 6.28318531
+#define NS ${NS}
+#define NP ${NP}
+
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float hash1(float n){ return fract(sin(n * 91.345) * 47453.5453); }
+mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+float sat(float x){ return clamp(x, 0.0, 1.0); }
+float line(float d, float w){ return smoothstep(w, w * 0.3, abs(d)); }
+vec3 hue(float h){ return 0.5 + 0.5 * cos(TAU * (h + vec3(0.0, 0.33, 0.67))); }
+
+// palettes: A violet/blue/pink, B fire/green. k: 0 deep, 1 main, 2 hot, 3 accent
+vec3 palA(int k){ vec3 c[4] = vec3[4](vec3(0.07,0.02,0.32), vec3(0.28,0.22,1.0), vec3(1.0,0.08,0.62), vec3(0.05,0.95,1.0)); return c[k]; }
+vec3 palB(int k){ vec3 c[4] = vec3[4](vec3(0.32,0.01,0.0), vec3(1.0,0.22,0.0), vec3(1.0,0.82,0.0), vec3(0.1,1.0,0.22)); return c[k]; }
+float uMix;   // 0 = A, 1 = B (set in main)
+vec3 P(int k){ return mix(palA(k), palB(k), uMix); }
+
+// ------------------------------------------------------------ one tunnel tile, local coords f in [-0.5, 0.5]
+vec3 tile(vec2 f, vec2 id, float beats, float kick){
+  float h = hash(id);
+  float h2 = hash(id + 17.0);
+  int type = int(h * 5.0);
+  float ph = h2 * TAU;
+  // a wave of light runs outward through the tiles on each beat
+  float pulse = 0.35 + 0.65 * pow(0.5 + 0.5 * cos(beats * PI * 0.5 + ph), 3.0);
+  float m = 0.0;
+  if (type == 0) {            // square ring, breathing
+    float s = 0.3 + 0.06 * sin(beats * PI + ph);
+    float d = max(abs(f.x), abs(f.y)) - s;
+    m = line(d, 0.05) + 0.6 * (1.0 - smoothstep(0.0, 0.08, max(abs(f.x), abs(f.y)) - 0.1)) * kick;
+  } else if (type == 1) {     // chevrons scrolling along the tile
+    float y = fract(f.y * 3.0 - abs(f.x) * 2.0 - beats * 0.5 + h);
+    m = line(y - 0.5, 0.14) * step(abs(f.x), 0.36) * step(abs(f.y), 0.4);
+  } else if (type == 2) {     // four dots blinking in turn
+    vec2 g = sign(f + 1e-4);
+    float k = (g.x > 0.0 ? 1.0 : 0.0) + (g.y > 0.0 ? 2.0 : 0.0);
+    float on = step(0.5, fract((beats + k) * 0.25 + h));
+    m = (1.0 - smoothstep(0.1, 0.13, length(abs(f) - 0.22))) * (0.3 + 0.7 * on);
+  } else if (type == 3) {     // target rings pulsing out
+    float r = length(f);
+    m = line(fract(r * 4.0 - beats * 0.5 + h) - 0.5, 0.12) * step(r, 0.45);
+  } else {                    // diamond with a hot core
+    float d = abs(f.x) + abs(f.y);
+    m = line(d - 0.33, 0.05) + (1.0 - smoothstep(0.08, 0.12, d)) * (0.6 + 0.6 * kick);
+  }
+  vec3 c = mix(P(1), P(2), step(0.55, h2));
+  c = mix(c, P(3), step(0.85, h2));
+  return c * m * pulse;
+}
+
+// ------------------------------------------------------------ one almond eye, local coords f (x along the ring)
+vec3 eye(vec2 f, vec2 id, float beats, float kick, float t){
+  float h = hash(id + 3.3);
+  // blink: each eye shuts briefly once every 8 beats at its own time
+  float bt = fract(beats / 8.0 + h);
+  float open = 1.0 - smoothstep(0.0, 0.03, bt) * (1.0 - smoothstep(0.03, 0.07, bt));
+  open = max(open, 0.04);
+  float x = f.x / 0.46;
+  float lid = 0.27 * (1.0 - x * x) * open;
+  float inside = step(abs(x), 1.0) * (1.0 - smoothstep(lid - 0.015, lid, abs(f.y)));
+  // the lids: a bright contour round the almond, a second one above like a brow
+  float lidLine = step(abs(x), 1.0) * line(abs(f.y) - lid, 0.022);
+  float brow = step(abs(x), 0.95) * line(f.y - (lid + 0.08) * 1.0, 0.016) * smoothstep(0.0, 0.3, open);
+  // gaze: the iris drifts slowly, every eye a little differently
+  vec2 gz = vec2(sin(beats * PI / 12.0 + h * TAU) * 0.12, cos(beats * PI / 6.0 + h * 5.0) * 0.04);
+  vec2 q = f - gz;
+  float ir = 0.16;
+  float r = length(q);
+  float a = atan(q.y, q.x);
+  vec3 iris = mix(P(3), P(2), 0.5 + 0.5 * sin(r * 40.0 - beats * PI)) * (0.7 + 0.5 * sin(a * 18.0 + beats));
+  float pr = 0.055 * (1.0 + 0.6 * kick);
+  vec3 c = mix(P(0), vec3(0.8), 0.12) * 0.5;                                 // sclera, dark
+  c = mix(c, iris, 1.0 - smoothstep(ir - 0.01, ir, r));
+  c = mix(c, vec3(0.0), 1.0 - smoothstep(pr - 0.01, pr, r));
+  c += vec3(1.0) * (1.0 - smoothstep(0.012, 0.022, length(q - vec2(-0.04, 0.045)))); // catch-light
+  return c * inside + P(3) * lidLine * 0.9 + P(2) * brow * 0.7;
+}
+
+// ------------------------------------------------------------ serpent: distance, arclength and side for one path
+// returns (unsigned distance, arclength at the closest point, signed side, path parameter 0..1)
+vec4 serpentHit(vec2 p, int s){
+  float best = 1e9;
+  vec4 res = vec4(1e9, 0.0, 0.0, 0.0);
+  for (int i = 0; i < NP - 1; i++) {
+    vec2 a = uPath[s * NP + i];
+    vec2 b = uPath[s * NP + i + 1];
+    vec2 ab = b - a;
+    float l2 = max(dot(ab, ab), 1e-8);
+    float h = clamp(dot(p - a, ab) / l2, 0.0, 1.0);
+    vec2 d = p - (a + ab * h);
+    float dd = dot(d, d);
+    if (dd < best) {
+      best = dd;
+      float side = sign(ab.x * d.y - ab.y * d.x);
+      res = vec4(sqrt(dd), mix(uArc[s * NP + i], uArc[s * NP + i + 1], h), side, (float(i) + h) / float(NP - 1));
+    }
+  }
+  return res;
+}
+
+void main(){
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
+  float t = uT;
+  float beats = uBeat;
+  float bars = beats / 4.0;
+  float bph = fract(beats);
+  float kick = exp(-bph * 6.0);
+  float hat = exp(-fract(beats + 0.5) * 10.0);
+  // structure
+  float build = smoothstep(2.0, 4.0, bars) * (1.0 - step(4.0, bars));
+  float drop = bars >= 4.0 ? exp(-(bars - 4.0) * 4.0 * 1.1) : 0.0;
+  uMix = smoothstep(3.9, 4.0, bars) * (1.0 - smoothstep(5.5, 6.0, bars));
+  float strobe = (bars >= 3.75 && bars < 4.0) ? step(0.5, fract(beats * 4.0)) : 0.0;
+
+  // ---------------------------------------------------------- camera: shake, punch, roll, fisheye, vortex twist
+  vec2 shake = drop * 0.012 * vec2(sin(t * 91.0), cos(t * 77.0));
+  vec2 p = uv + shake;
+  vec2 c0 = vec2(0.0, 0.03);
+  p -= c0;
+  p *= 1.0 - 0.035 * kick - 0.08 * drop;
+  float roll = 0.18 * sin(TAU * t / uLoop) + 0.06 * sin(TAU * 2.0 * t / uLoop);
+  p = rot(roll) * p;
+  float r2 = dot(p, p);
+  p *= 1.0 + (1.25 + 0.25 * sin(TAU * t / uLoop)) * r2;          // the bulge
+  float rr0 = length(p);
+  float twAmt = 1.6 + 1.4 * build - 3.2 * uMix;                   // winds up, reverses on the drop
+  p = rot(twAmt * exp(-rr0 * 3.2)) * p;                           // the vortex
+  vec2 w = p;
+  float rr = length(w);
+  float ang = atan(w.y, w.x);
+
+  vec3 col = vec3(0.0);
+  float far = smoothstep(0.015, 0.12, rr);
+
+  // ---------------------------------------------------------- tunnel coordinates: 22 tiles round, 12 rows per loop
+  const float N = 22.0;
+  float cell = TAU / N;
+  float speed = 12.0 * cell / uLoop;
+  float zz = log(max(rr, 1e-4)) + speed * t;
+  vec2 g = vec2(ang / cell, zz / cell);
+  vec2 id = floor(g);
+  vec2 f = fract(g) - 0.5;
+  float row = mod(id.y, 12.0);
+  float isEye = step(mod(row, 3.0), 0.5);                         // every third row is a ring of eyes
+
+  // contour stripes in the background, bending with the vortex
+  {
+    float k = zz * 9.0 + sin(ang * 3.0 + beats * PI / 12.0) * 0.9 + sin(ang * 7.0 - t) * 0.25;
+    float s = abs(fract(k) - 0.5);
+    float band = line(s - 0.25, 0.07);
+    vec3 cc = mix(P(0), P(2), 0.5 + 0.5 * sin(k * 0.21 + beats * PI / 6.0));
+    col += cc * band * 0.09 * far;
+  }
+  // tiles, or eyes
+  {
+    vec2 idw = vec2(mod(id.x, N), row);
+    vec3 tc;
+    if (isEye > 0.5) tc = eye(f, idw, beats, kick, t);
+    else tc = tile(f, idw, beats, kick);
+    float depthLight = far * (0.55 + 0.45 * smoothstep(0.08, 0.35, rr));
+    // a kick flash running outward ring by ring
+    float wave = exp(-abs(fract(zz / (cell * 4.0) - beats * 0.25) - 0.5) * 8.0) * kick;
+    col += tc * depthLight * (0.85 + 0.9 * wave);
+    // tile seams glow faintly
+    float seam = line(max(abs(f.x), abs(f.y)) - 0.5, 0.04);
+    col += P(0) * seam * 0.14 * far;
+  }
+  // light streaks out of the centre
+  {
+    float n = 90.0;
+    float a = ang / TAU * n;
+    float ia = floor(a);
+    float h = hash1(ia);
+    float lane = 1.0 - smoothstep(0.0, 0.18, abs(fract(a) - 0.5) - 0.02);
+    float run = fract(zz * 0.9 - t * (1.0 + h) * 0.0 + h - beats * (0.25 + 0.25 * floor(h * 3.0)) / 1.0);
+    float dash = smoothstep(0.0, 0.05, run) * (1.0 - smoothstep(0.08, 0.2, run));
+    col += mix(vec3(1.0), P(3), h) * lane * dash * step(0.6, h) * far * (0.5 + 0.8 * hat);
+  }
+  // the bright heart of the vortex
+  col += mix(P(2), vec3(1.0), 0.5) * exp(-rr * 26.0) * (0.6 + 0.6 * kick);
+
+  // ---------------------------------------------------------- comets: teardrops shot out of the centre
+  for (int i = 0; i < 9; i++) {
+    float fi = float(i);
+    float a0 = hash1(fi * 7.1) * TAU + 0.25 * sin(TAU * t / uLoop + fi);
+    float life = fract(hash1(fi * 3.3) + 2.0 * t / uLoop);       // two flights per loop
+    float rad = 0.03 + 0.62 * life * life;
+    vec2 dir = vec2(cos(a0), sin(a0));
+    vec2 cp = dir * rad;
+    vec2 lp = w - cp;
+    float along = dot(lp, dir);
+    float across = dot(lp, vec2(-dir.y, dir.x));
+    float size = 0.008 + 0.028 * life;
+    // head round, tail tapering back toward the centre
+    float tail = clamp(-along / (size * 5.0), 0.0, 1.0);
+    float width = size * (1.0 - tail * 0.92);
+    float d = length(vec2(max(along, 0.0) * 1.0 + min(along, 0.0) * 0.2, across)) - width;
+    float body = 1.0 - smoothstep(0.0, 0.004, d);
+    vec3 cc = mix(vec3(1.0, 0.92, 0.45), mix(P(2), P(1), tail), smoothstep(0.0, 0.5, tail + 0.2 * across / size));
+    float fade = smoothstep(0.0, 0.1, life) * (1.0 - smoothstep(0.85, 1.0, life));
+    col += cc * body * fade * 1.1 + cc * exp(-max(d, 0.0) * 160.0) * fade * 0.25;
+  }
+
+  // ---------------------------------------------------------- target orbs: concentric ovals, drifting, pulsing
+  for (int i = 0; i < 5; i++) {
+    float fi = float(i);
+    float a = TAU * (hash1(fi + 2.0) + t / uLoop * (mod(fi, 2.0) < 1.0 ? 1.0 : -1.0));
+    vec2 op = vec2(cos(a) * (0.28 + 0.05 * fi), sin(a * 2.0 + fi) * 0.4);
+    vec2 lp = (w - op) * vec2(1.0, 1.35);
+    float r = length(lp);
+    float R = 0.035 + 0.02 * hash1(fi + 9.0);
+    float rings = line(fract(r / R * 2.5 - beats * 0.5) - 0.5, 0.15) * (1.0 - smoothstep(R * 0.9, R, r));
+    vec3 oc = hue(hash1(fi) + beats / 24.0 + r * 4.0);
+    col = mix(col, col * 0.3, (1.0 - smoothstep(R * 0.95, R, r)) * 0.8);
+    col += oc * rings * (0.8 + 0.5 * kick);
+  }
+
+  // ---------------------------------------------------------- serpents: tubes of diamond scales
+  for (int s = 0; s < NS; s++) {
+    vec4 hit = serpentHit(w, s);
+    float u = hit.w;                                   // 0 tail (in the vortex) .. 1 head (outside)
+    float wid = mix(0.005, 0.042, pow(u, 0.8)) * (1.0 + 0.12 * kick);
+    // a rounded head
+    float headK = smoothstep(0.93, 1.0, u);
+    wid *= 1.0 + 0.35 * headK * (1.0 - smoothstep(0.985, 1.0, u) * 0.9);
+    float v = hit.x / wid;                             // 0 spine .. 1 flank
+    if (v < 1.0) {
+      float vs = v * hit.z;                            // signed across
+      float nz = sqrt(max(0.0, 1.0 - v * v));          // tube normal
+      vec3 n = normalize(vec3(vs, 0.0, nz));
+      float diff = 0.12 + 0.88 * max(0.0, dot(n, normalize(vec3(-0.4, 0.5, 0.8))));
+      // scale lattice in (arclength, around-the-tube) coordinates, diamonds
+      float S = hit.y / max(wid, 0.004) * 1.9;
+      float A = asin(clamp(vs, -1.0, 1.0)) / (PI * 0.5) * 2.2;
+      vec2 sc = vec2(S + A, S - A) * 0.7071;
+      vec2 sf = fract(sc) - 0.5;
+      vec2 sid = floor(sc);
+      float edge = max(abs(sf.x), abs(sf.y));
+      // the light wave along the body, and the scales breathing on the beat
+      float wave = 0.5 + 0.5 * sin(S * 0.22 - beats * PI);
+      float breathe = 0.82 + 0.18 * kick;
+      float scale = 1.0 - smoothstep(0.3 * breathe, 0.4 * breathe, edge);
+      vec3 rim = mix(P(1), P(2), wave);
+      vec3 core = P(3) * (0.8 + 0.4 * wave);
+      vec3 sc3 = mix(rim, core, 1.0 - smoothstep(0.02, 0.26, edge));
+      sc3 *= 0.55 + 0.75 * wave;
+      // a zigzag along the spine, marching forward
+      float zig = abs(fract(S * 0.17 - beats * 0.5) - 0.5) * 2.0;
+      float spine = line(vs - (zig - 0.5) * 0.7, 0.13) * (1.0 - smoothstep(0.75, 0.95, v));
+      vec3 sCol = sc3 * scale * diff;
+      sCol += mix(P(2), vec3(1.0), 0.5) * spine * (0.6 + 0.6 * kick);
+      // specular sheen
+      sCol += vec3(1.0) * pow(max(0.0, dot(n, normalize(vec3(-0.3, 0.4, 1.0)))), 24.0) * 0.35 * scale;
+      // eyes on the head
+      if (headK > 0.0) {
+        float ex = 1.0 - smoothstep(0.0, 0.15, abs(abs(vs) - 0.45) + abs(u - 0.975) * 25.0 - 0.1);
+        sCol = mix(sCol, mix(P(3), vec3(1.0), 0.6) * (1.3 + kick) * (0.6 + 0.4 * uLook[s]), ex);
+      }
+      float a = 1.0 - smoothstep(0.88, 1.0, v);
+      col = mix(col, sCol, a * smoothstep(0.08, 0.3, u));
+    } else {
+      // a soft glow round the body
+      col += P(2) * exp(-(hit.x - wid) * 90.0) * 0.12 * smoothstep(0.05, 0.4, u);
+    }
+  }
+
+  // ---------------------------------------------------------- beat, build, drop, tone
+  col *= 0.9 + 0.3 * kick;
+  col *= 1.0 + strobe * 0.8;
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(col, vec3(lum) * vec3(1.05, 1.07, 1.12) * 1.7, clamp(drop, 0.0, 1.0));
+  col = 1.0 - exp(-col * 1.5);
+  float l2 = dot(col, vec3(0.299, 0.587, 0.114));
+  col = clamp(mix(vec3(l2), col, 1.3), 0.0, 1.0);
+  col *= 1.0 - 0.5 * smoothstep(0.4, 0.9, length(uv * vec2(1.25, 1.0)));
+  col += (hash(gl_FragCoord.xy + fract(t * 30.0) * 97.0) - 0.5) * 0.03;
+  o = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`;
+
+// ------------------------------------------------------------ the serpents' paths, computed per frame on the CPU
+// Each one spirals from outside the frame into the vortex. Its head sweeps round, the body slithers with a wave that
+// travels tailward, and the whole thing breathes in and out. All periods divide the loop.
+function paths(t) {
+  const L = DURATION;
+  const pts = new Float32Array(NS * NP * 2);
+  const arc = new Float32Array(NS * NP);
+  const look = new Float32Array(NS);
+  for (let s = 0; s < NS; s++) {
+    const dir = s === 1 ? -1 : 1;
+    const th0 = (s / NS) * Math.PI * 2 + dir * (Math.PI * 2) * (t / L) * (s === 2 ? 2 : 1);
+    const breath = 1 + 0.08 * Math.sin((Math.PI * 2 * 2 * t) / L + s);
+    let prev = null;
+    let acc = 0;
+    for (let i = 0; i < NP; i++) {
+      const u = i / (NP - 1);                                  // 0 tail .. 1 head
+      const turns = 0.8 + 0.12 * s;
+      const th = th0 - dir * (1 - u) * turns * Math.PI * 2;
+      const R = (0.62 + 0.06 * s) * breath * Math.exp(-(1 - u) * 2.9);
+      // slither: a sideways wave travelling down the body
+      const sl = 0.06 * Math.pow(u, 1.2) * Math.sin(u * 15 - (Math.PI * 2 * 6 * t) / L + s * 2);
+      const r = R * (1 + sl * 2.2);
+      const x = Math.cos(th) * r;
+      const y = Math.sin(th) * r;
+      pts[(s * NP + i) * 2] = x;
+      pts[(s * NP + i) * 2 + 1] = y;
+      if (prev) acc += Math.hypot(x - prev[0], y - prev[1]);
+      arc[s * NP + i] = acc;
+      prev = [x, y];
+    }
+    look[s] = 0.5 + 0.5 * Math.sin((Math.PI * 2 * 3 * t) / L + s);
+  }
+  return {pts, arc, look};
+}
+
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', {preserveDrawingBuffer: true, antialias: false});
+const sh = (type, src) => {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+};
+const prog = gl.createProgram();
+gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT));
+gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const loc = gl.getAttribLocation(prog, 'p');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+const U = (n) => gl.getUniformLocation(prog, n);
+const uRes = U('uRes'), uT = U('uT'), uLoop = U('uLoop'), uBeat = U('uBeat'), uPath = U('uPath'), uArc = U('uArc'), uLook = U('uLook');
+
+function draw(t) {
+  const tt = ((t % DURATION) + DURATION) % DURATION;
+  const pth = paths(tt);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.uniform2f(uRes, canvas.width, canvas.height);
+  gl.uniform1f(uT, tt);
+  gl.uniform1f(uLoop, DURATION);
+  gl.uniform1f(uBeat, (tt * BPM) / 60);
+  gl.uniform2fv(uPath, pth.pts);
+  gl.uniform1fv(uArc, pth.arc);
+  gl.uniform1fv(uLook, pth.look);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.finish();
+}
+window.seek = (t) => draw(t);
+const params = new URLSearchParams(location.search);
+if (params.has('render')) draw(Number(params.get('t') || 0));
+else {
+  const t0 = performance.now();
+  const loop = (now) => {
+    draw((now - t0) / 1000);
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+}
+window.READY = true;
+</script>
+</body>
+</html>
