@@ -29,9 +29,12 @@
 //   orbs       concentric target orbs drifting and pulsing
 // Structure: bars 1-3 violet/blue, bar 4 builds (twist winds up, 16th strobe on the last beat), bar 5 drops (silver
 // flash, shake, fire palette, twist reverses), bar 6 rides it and crossfades home for the loop.
-const BPM = 145;
-const BEATS = 24;
-const DURATION = BEATS * 60 / BPM;
+// synced to the track: 143.5 BPM, first beat at 0.116 s, breakdown from beat 21, drop on beat 38 (16.0 s)
+const BPM = 143.5;
+const T0 = 0.116;
+const BREAK = 21;
+const DROP = 38;
+const DURATION = 30.2;
 window.DURATION = DURATION;
 const NS = 3;      // serpents
 const NP = 44;     // points per serpent path
@@ -46,6 +49,7 @@ uniform float uT, uLoop, uBeat;
 uniform vec2 uPath[${NS * NP}];
 uniform float uArc[${NS * NP}];
 uniform float uLook[${NS}];
+uniform float uDrop, uBreak;
 out vec4 o;
 #define PI 3.14159265
 #define TAU 6.28318531
@@ -66,7 +70,8 @@ float uMix;   // 0 = A, 1 = B (set in main)
 vec3 P(int k){ return mix(palA(k), palB(k), uMix); }
 
 // ------------------------------------------------------------ one tunnel tile, local coords f in [-0.5, 0.5]
-float tri(float x){ return abs(fract(x) - 0.5) * 4.0 - 1.0; }
+// a rounded zigzag: no corners, so every move stays smooth
+float tri(float x){ float s = sin(TAU * x); return s * (1.25 - 0.25 * s * s); }
 // speeds that all divide the 24-beat loop: 1/6, 1/3, 1/2, 1 and 2 cycles per 4 beats
 float spd(float h){ return h < 0.2 ? 1.0 / 6.0 : h < 0.4 ? 1.0 / 3.0 : h < 0.6 ? 0.5 : h < 0.85 ? 1.0 : 2.0; }
 vec2 moveTile(vec2 f, vec2 id, float beats){
@@ -175,10 +180,13 @@ void main(){
   float kick = exp(-bph * 6.0);
   float hat = exp(-fract(beats + 0.5) * 10.0);
   // structure
-  float build = smoothstep(2.0, 4.0, bars) * (1.0 - step(4.0, bars));
-  float drop = bars >= 4.0 ? exp(-(bars - 4.0) * 4.0 * 1.1) : 0.0;
-  uMix = smoothstep(3.9, 4.0, bars) * (1.0 - smoothstep(5.5, 6.0, bars));
-  float strobe = (bars >= 3.75 && bars < 4.0) ? step(0.5, fract(beats * 4.0)) : 0.0;
+  float db = beats - uDrop;
+  float inBreak = smoothstep(uBreak - 1.0, uBreak + 1.0, beats) * (1.0 - step(0.0, db));
+  float build = smoothstep(-8.0, 0.0, db) * (1.0 - step(0.0, db));
+  float drop = db >= 0.0 ? exp(-db * 1.1) : 0.0;
+  uMix = smoothstep(-0.25, 0.0, db);
+  float strobe = build * (0.5 + 0.5 * cos(beats * TAU * 2.0));     // a smooth eighth-note swell, not a hard strobe
+  kick *= 1.0 - 0.75 * inBreak * (1.0 - build);                    // the breakdown breathes instead of punching
 
   // ---------------------------------------------------------- camera: shake, punch, roll, fisheye, vortex twist
   vec2 shake = drop * 0.012 * vec2(sin(t * 91.0), cos(t * 77.0));
@@ -316,8 +324,16 @@ void main(){
       float rimL = line(hd - 0.36, 0.035);
       float core = 1.0 - smoothstep(0.0, 0.22 + 0.06 * own, hd);
       vec3 hc = hh < 0.4 ? P(3) : hh < 0.75 ? P(1) : P(2);
-      vec3 sCol = (hc * 0.25 * cellIn + hc * rimL * 1.1 + mix(hc, vec3(1.0), 0.45) * core * 0.9) * glowK * diff;
-      sCol += vec3(1.0) * pow(max(0.0, dot(n, normalize(vec3(-0.3, 0.4, 1.0)))), 28.0) * 0.3;
+      // a 3D tube: each hexagon a small dome, key light and specular on it, darker toward the silhouette, a rim of light
+      vec3 L1 = normalize(vec3(-0.4, 0.55, 0.75));
+      vec3 nb = normalize(n + vec3(gv.y, gv.x, 0.0) * 1.1 * cellIn);
+      float dif2 = 0.08 + 0.92 * max(0.0, dot(nb, L1));
+      float spec = pow(max(0.0, dot(reflect(-L1, nb), vec3(0.0, 0.0, 1.0))), 36.0);
+      float fres = pow(1.0 - nz, 3.0);
+      float ao = 0.3 + 0.7 * smoothstep(1.0, 0.5, v);
+      vec3 sCol = (hc * 0.4 * cellIn * dif2 + hc * rimL * 0.9 * (0.5 + 0.5 * diff) + mix(hc, vec3(1.0), 0.45) * core * 0.85) * glowK * ao;
+      sCol += vec3(0.015, 0.015, 0.03) * (1.0 - cellIn) * diff;
+      sCol += vec3(1.0) * spec * 0.6 * cellIn * ao + mix(P(3), vec3(1.0), 0.3) * fres * 0.45;
       float a = 1.0 - smoothstep(0.85, 1.0, v);
       col = mix(col, sCol, a);
     } else {
@@ -327,7 +343,8 @@ void main(){
 
   // ---------------------------------------------------------- beat, build, drop, tone
   col *= 0.9 + 0.3 * kick;
-  col *= 1.0 + strobe * 0.8;
+  col *= 1.0 + strobe * 0.45;
+  col *= 1.0 - 0.25 * inBreak * (1.0 - build);
   float lum = dot(col, vec3(0.299, 0.587, 0.114));
   col = mix(col, vec3(lum) * vec3(1.05, 1.07, 1.12) * 1.7, clamp(drop, 0.0, 1.0));
   col = 1.0 - exp(-col * 1.5);
@@ -395,6 +412,7 @@ const loc = gl.getAttribLocation(prog, 'p');
 gl.enableVertexAttribArray(loc);
 gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
 const U = (n) => gl.getUniformLocation(prog, n);
+const uDrop = U('uDrop'), uBreak = U('uBreak');
 const uRes = U('uRes'), uT = U('uT'), uLoop = U('uLoop'), uBeat = U('uBeat'), uPath = U('uPath'), uArc = U('uArc'), uLook = U('uLook');
 
 function draw(t) {
@@ -404,7 +422,9 @@ function draw(t) {
   gl.uniform2f(uRes, canvas.width, canvas.height);
   gl.uniform1f(uT, tt);
   gl.uniform1f(uLoop, DURATION);
-  gl.uniform1f(uBeat, (tt * BPM) / 60);
+  gl.uniform1f(uBeat, ((tt - T0) * BPM) / 60);
+  gl.uniform1f(uDrop, DROP);
+  gl.uniform1f(uBreak, BREAK);
   gl.uniform2fv(uPath, pth.pts);
   gl.uniform1fv(uArc, pth.arc);
   gl.uniform1fv(uLook, pth.look);
