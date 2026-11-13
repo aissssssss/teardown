@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Fractal KIFS VJ</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}canvas{display:block;height:100vh;width:auto;margin:0 auto}</style>
+</head><body><canvas id="c" width="1080" height="1920"></canvas><script>
+// FRACTAL KIFS: a kaleidoscopic fractal in one short shader. A 6-fold mirror, then 11 folds of abs / offset / rotate /
+// scale; every fold leaves a glowing ring and a line, coloured by depth. Three numbers move it: the fold offsets
+// breathe over bars, the twist turns slowly, the zoom drifts in. Synced to the track: 143.5 BPM, drop on beat 38.
+const BPM = 143.5, T0 = 0.116, DROP = 38, DURATION = 30.2;
+window.DURATION = DURATION;
+const FRAG = `#version 300 es
+precision highp float;
+uniform vec2 R; uniform float T, B; out vec4 o;
+#define TAU 6.2831853
+mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+vec3 pal(float x){ vec3 c = 0.5 + 0.5 * cos(TAU * (x + vec3(0.0, 0.33, 0.67))); return c * c * 1.4; }
+void main(){
+  vec2 p = (gl_FragCoord.xy - 0.5 * R) / R.y;
+  float kick = exp(-fract(B) * 5.0), db = B - ${DROP}.0, drop = db > 0.0 ? exp(-db * 1.1) : 0.0;
+  float post = step(0.0, db);
+  p *= (1.9 - 0.012 * T) * (1.0 - 0.06 * kick);                     // slow zoom in, a punch on every beat
+  p *= rot(T * 0.05 * (post > 0.5 ? -1.0 : 1.0));
+  float a = atan(p.y, p.x), r = length(p), n = 6.0;                  // 6-fold mirror
+  a = abs(mod(a, TAU / n) - TAU / n * 0.5);
+  p = r * vec2(cos(a), sin(a));
+  vec3 col = vec3(0.0); float s = 1.0;
+  for (int i = 0; i < 11; i++) {
+    p = abs(p) - vec2(0.42 + 0.1 * sin(B * TAU / 32.0), 0.28 + 0.08 * cos(B * TAU / 48.0 + 1.0));
+    p *= rot(0.62 + 0.2 * sin(T * 0.13) + 0.15 * post);
+    p *= 1.34; s *= 1.34;
+    float ring = abs(length(p) - 0.55 - 0.08 * kick) / s, ln = abs(p.y) / s;
+    vec3 c = pal(float(i) * 0.075 + B / 64.0 + 0.5 * post);
+    float g1 = 0.0045 / (ring + 0.0045), g2 = 0.002 / (ln + 0.002);
+    col += c * (g1 * g1 * 1.3 + g1 * 0.1 + g2 * g2 * 0.45) / (1.0 + float(i) * 0.35) * (0.7 + 0.8 * kick * step(float(i), 4.0));
+  }
+  col = 1.0 - exp(-col * 1.3);
+  col = mix(col, vec3(dot(col, vec3(0.3, 0.59, 0.11))) * 1.5, clamp(drop, 0.0, 1.0));   // silver flash on the drop
+  col *= 1.0 - 0.45 * smoothstep(0.35, 0.9, length((gl_FragCoord.xy - 0.5 * R) / R.y * vec2(1.2, 1.0)));
+  o = vec4(col, 1.0);
+}`;
+const gl = document.getElementById('c').getContext('webgl2', {preserveDrawingBuffer: true});
+const sh = (t, src) => { const x = gl.createShader(t); gl.shaderSource(x, src); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+const pr = gl.createProgram();
+gl.attachShader(pr, sh(gl.VERTEX_SHADER, '#version 300 es\nin vec2 v;void main(){gl_Position=vec4(v,0,1);}'));
+gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(pr); gl.useProgram(pr);
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+const draw = (t) => {
+  gl.viewport(0, 0, 1080, 1920);
+  gl.uniform2f(gl.getUniformLocation(pr, 'R'), 1080, 1920);
+  gl.uniform1f(gl.getUniformLocation(pr, 'T'), t);
+  gl.uniform1f(gl.getUniformLocation(pr, 'B'), ((t - T0) * BPM) / 60);
+  gl.drawArrays(gl.TRIANGLES, 0, 3); gl.finish();
+};
+window.seek = draw;
+if (location.search.includes('render')) draw(0);
+else { const t0 = performance.now(); const f = (n) => { draw(((n - t0) / 1000) % DURATION); requestAnimationFrame(f); }; requestAnimationFrame(f); }
+window.READY = true;
+</script></body></html>
