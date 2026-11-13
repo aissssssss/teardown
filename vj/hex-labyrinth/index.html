@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Hex Labyrinth VJ</title>
+<style>
+  html,body{margin:0;height:100%;background:#000;overflow:hidden}
+  canvas{display:block;height:100vh;width:auto;margin:0 auto;aspect-ratio:9/16}
+</style>
+</head>
+<body>
+<canvas id="c" width="1080" height="1920"></canvas>
+<script>
+// HEX LABYRINTH: a 9:16 VJ loop locked to 145 BPM. 16 bars = 26.48 s, and every layer completes a whole number of
+// its own cycles in that time, so the last frame runs straight into the first.
+//
+// Layers, back to front, each with its own motion:
+//   1. labyrinth mandala  truchet maze in log-polar space, 6-fold mirrored, flowing outward with the zoom
+//   2. hex tunnel         stepped neon hexagons rushing toward the camera, one ring per bar, lit by the kick
+//   3. dot rings          small circles on the tunnel's bands, breathing on every beat
+//   4. floating hexagons  translucent plates drifting outward and spinning, parallax against the tunnel
+//   5. bead serpents      three chains of beads winding round the centre, each on its own wave
+//   6. white squiggles    thick polar sine-wave tubes turning against the serpents
+//   7. bokeh + grain      out-of-focus orbs drifting across, film grain, vignette
+// Beat structure: kick pulse every beat, a palette per 4 bars, a build in bar 8 and a colourless flash on the drop
+// at bar 9 (the downbeat of the second phrase), then colour floods back.
+const BPM = 145;
+const BARS = 16;
+const DURATION = BARS * 4 * 60 / BPM;
+window.DURATION = DURATION;
+
+const VERT = `#version 300 es
+in vec2 p; void main(){ gl_Position = vec4(p, 0.0, 1.0); }`;
+
+const FRAG = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform float uT;      // seconds into the loop
+uniform float uLoop;   // loop length, seconds
+uniform float uBeat;   // beats since loop start
+out vec4 o;
+#define PI 3.14159265
+#define TAU 6.28318531
+
+float hash(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+float hash1(float n){ return fract(sin(n * 91.345) * 47453.5453); }
+mat2 rot(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+// flat-topped hexagon "radius"
+float hexR(vec2 p){ p = abs(p); return max(dot(p, vec2(0.8660254, 0.5)), p.y); }
+float hexSd(vec2 p, float r){ return hexR(p) - r; }
+// stroke and glow of a signed distance
+float line(float d, float w){ return smoothstep(w, w * 0.35, abs(d)); }
+float glow(float d, float k){ return exp(-abs(d) * k); }
+
+// ------------------------------------------------------------ palettes: one per 4 bars
+// each: rings, beadA, beadB, accent (hex plates), maze
+vec3 pal(int i, int k){
+  if (i == 0) { vec3 c[5] = vec3[5](vec3(0.18,1.0,0.35), vec3(0.2,0.9,1.0), vec3(1.0,0.22,0.18), vec3(1.0,0.75,0.1), vec3(0.15,0.55,0.3)); return c[k]; }
+  if (i == 1) { vec3 c[5] = vec3[5](vec3(0.55,0.25,1.0), vec3(1.0,0.2,0.75), vec3(0.2,0.95,1.0), vec3(1.0,0.35,0.6), vec3(0.4,0.15,0.75)); return c[k]; }
+  if (i == 2) { vec3 c[5] = vec3[5](vec3(1.0,0.42,0.08), vec3(1.0,0.9,0.2), vec3(0.1,0.85,0.8), vec3(1.0,0.15,0.1), vec3(0.75,0.22,0.05)); return c[k]; }
+  vec3 c[5] = vec3[5](vec3(0.1,0.95,0.85), vec3(1.0,0.35,0.85), vec3(0.75,1.0,0.2), vec3(0.3,0.5,1.0), vec3(0.05,0.5,0.55)); return c[k];
+}
+vec3 P(int k, float bars){
+  // 4 bars each, a one-beat crossfade into the next
+  float seg = bars / 4.0;
+  int i = int(mod(floor(seg), 4.0));
+  float f = smoothstep(3.75, 4.0, mod(bars, 4.0));
+  return mix(pal(i, k), pal(int(mod(float(i + 1), 4.0)), k), f);
+}
+
+void main(){
+  vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;   // y in [-0.5, 0.5]
+  float t = uT;
+  float beats = uBeat;
+  float bars = beats / 4.0;
+  float bphase = fract(beats);
+  float kick = exp(-bphase * 7.0);
+  float bar = floor(bars);
+  // the drop: bar 8 builds, bar 9's downbeat hits colourless and colour floods back over two beats
+  float build = smoothstep(7.0, 8.0, bars) * (1.0 - step(8.0, bars));
+  float drop = (bars >= 8.0) ? exp(-(bars - 8.0) * 4.0 * 0.9) : 0.0;
+  // a little punch-in on every kick, a bigger one on the drop
+  vec2 c = vec2(0.0, 0.06);
+  vec2 q = (uv - c) * (1.0 - 0.025 * kick - 0.06 * drop + 0.03 * build * sin(beats * PI * 4.0));
+
+  float r = hexR(q);
+  float rr = length(q);
+  float ang = atan(q.y, q.x);
+
+  // ---------------------------------------------------------- the zoom: log-depth, 16 rings per loop
+  const float DZ = 0.36;
+  float speed = DZ * 16.0 / uLoop;
+  float z = log(max(r, 1e-4));
+  float zz = z + speed * t;              // rings rise outward
+  float ringPhase = zz / DZ;
+  float ringId = floor(ringPhase);
+  float fr = fract(ringPhase);
+  // the tunnel turns one sixth over the loop
+  float spin = TAU / 6.0 * t / uLoop;
+
+  vec3 col = vec3(0.0);
+  float far = smoothstep(0.012, 0.09, rr);   // the vanishing point fades to black
+  float near = 1.0 - smoothstep(0.42, 0.62, rr);
+
+  // ---------------------------------------------------------- 1. labyrinth mandala (6-fold, mirrored)
+  {
+    vec2 qr = rot(spin * 0.5) * q;
+    float a = atan(qr.y, qr.x);
+    float sector = TAU / 6.0;
+    a = mod(a, sector);
+    a = abs(a - sector * 0.5);           // mirror inside each sector
+    float cell = DZ / 6.0;
+    vec2 g = vec2(a, log(max(length(qr), 1e-4)) + speed * t) / cell;
+    vec2 id = floor(g);
+    id.y = mod(id.y, 96.0);              // 96 cells pass per loop: the maze repeats exactly
+    vec2 f = fract(g) - 0.5;
+    if (hash(id + 7.0) > 0.5) f.x = -f.x;
+    // quarter-circle truchet: two arcs per cell make a winding labyrinth
+    vec2 f1 = f - vec2(0.5, 0.5), f2 = f + vec2(0.5, 0.5);
+    float d = min(abs(length(f1) - 0.5), abs(length(f2) - 0.5));
+    float w = 0.07;
+    float m = line(d, w) + 0.35 * glow(d, 18.0);
+    // the maze lights band by band as the rings pass
+    float band = 0.35 + 0.65 * pow(0.5 + 0.5 * cos(TAU * (g.y / 4.0 - 0.15)), 3.0);
+    vec3 mc = mix(P(4, bars), P(1, bars), 0.5 + 0.5 * sin(id.y * 0.7 + id.x * 1.3 + beats * 0.25));
+    float centre = 0.25 + 0.95 * (1.0 - smoothstep(0.08, 0.34, rr));
+    col += mc * m * band * 0.6 * centre * far * (0.75 + 0.5 * kick);
+  }
+
+  // ---------------------------------------------------------- 2. hex tunnel: three stepped lines per ring
+  {
+    float lit = 0.0;
+    for (int k = 0; k < 4; k++) {
+      float off = float(k) * 0.06;
+      float d = (fract(ringPhase - off) - 0.5) * DZ;      // log-space distance to this line
+      float w = 0.010 + 0.004 * float(k);
+      lit += line(d, w) * (1.0 - 0.2 * float(k)) + 0.18 * glow(d, 70.0);
+    }
+    // each ring flashes as it crosses the beat
+    float hit = exp(-mod(ringPhase - bars + 0.5, 1.0) * 3.0);
+    vec3 rc = P(0, bars) * (0.75 + 0.9 * kick * hit);
+    col += rc * lit * far * near * 1.1;
+  }
+
+  // ---------------------------------------------------------- 3. dot rings on the tunnel bands
+  {
+    vec2 qr = rot(-spin) * q;
+    float a = atan(qr.y, qr.x);
+    float n = 42.0;                                       // dots round each band
+    float zb = (log(max(rr, 1e-4)) + speed * t) / DZ * 2.0 + 0.5;
+    float bid = floor(zb);
+    float stagger = mod(bid, 2.0) * 0.5;
+    float ga = a / TAU * n + stagger + bid * 0.37;
+    vec2 cellc = vec2(fract(ga) - 0.5, fract(zb) - 0.5);
+    // a cell is roughly square on screen: arc = r*da, depth = r*dz
+    vec2 local = vec2(cellc.x * TAU / n, cellc.y * DZ / 2.0) * rr;
+    float rad = rr * (TAU / n) * (0.17 + 0.06 * kick);
+    float d = length(local) - rad;
+    float on = step(0.3, hash(vec2(mod(floor(ga), n), mod(bid, 32.0)))) * step(0.5, mod(bid, 2.0));
+    on *= 1.0 - smoothstep(0.22, 0.5, rr);
+    vec3 dc = mix(P(1, bars), P(2, bars), step(0.5, hash(vec2(floor(ga) + 3.0, mod(bid, 32.0)))));
+    col += dc * (line(d, rr * 0.004) + 0.3 * glow(d, 900.0 / max(rr, 0.05) * 0.05)) * on * far * near * 0.9;
+  }
+
+  // ---------------------------------------------------------- 4. floating translucent hexagons
+  for (int i = 0; i < 6; i++) {
+    float fi = float(i);
+    float a0 = hash1(fi * 3.1) * TAU;
+    // each drifts outward through 2 loops of depth and wraps: 2 full passes per loop keep it periodic
+    float life = fract(hash1(fi * 5.7) + 2.0 * t / uLoop);
+    float rad = 0.04 * exp(life * 2.7);
+    vec2 pc = vec2(cos(a0 + spin * 2.0), sin(a0 + spin * 2.0)) * rad;
+    float size = rad * (0.2 + 0.12 * hash1(fi * 1.9));
+    vec2 lp = rot(fi + TAU * 2.0 * t / uLoop * (mod(fi, 2.0) * 2.0 - 1.0)) * (q - pc);
+    float d = hexSd(lp, size);
+    float fade = smoothstep(0.0, 0.15, life) * (1.0 - smoothstep(0.75, 1.0, life));
+    vec3 hc = mix(P(3, bars), P(2, bars), step(0.5, hash1(fi * 8.3)));
+    float fill = (1.0 - smoothstep(-0.004, 0.0, d)) * 0.12;
+    // a honeycomb of tiny dots inside some of them
+    vec2 hp = lp / (size * 0.18);
+    float comb = (length(fract(hp) - 0.5) < 0.22 ? 1.0 : 0.0) * step(0.5, hash1(fi * 2.2)) * (1.0 - smoothstep(-0.01, 0.0, d));
+    col += hc * (fill + line(d, 0.003) * 0.9 + comb * 0.25) * fade;
+  }
+
+  // ---------------------------------------------------------- 5. bead serpents
+  for (int s = 0; s < 2; s++) {
+    float fs = float(s);
+    float R0 = 0.2 + 0.13 * fs;
+    float dir = (s == 1) ? -1.0 : 1.0;
+    float om = dir * TAU * (2.0 + fs) / uLoop;                 // whole turns per loop
+    float wob = 5.0 + fs;
+    vec3 ca = P(1, bars), cb = P(2, bars);
+    for (int b = 0; b < 22; b++) {
+      float fb = float(b);
+      float th = om * t + fs * 2.1 - dir * fb * 0.105;
+      float R = R0 * (1.0 + 0.16 * sin(wob * th + TAU * t / uLoop * 3.0 + fs));
+      vec2 bp = vec2(cos(th), sin(th) * 1.08) * R;
+      float br = (0.017 - fb * 0.00045) * (1.0 + 0.3 * kick * step(fb, 2.0)) * (0.85 + 0.5 * R / 0.35);
+      float d = length(q - bp) - br;
+      float ringv = line(d, 0.0032) + 0.4 * glow(d, 200.0);
+      float core = 1.0 - smoothstep(br * 0.3, br * 0.48, length(q - bp));
+      vec3 bc = mod(fb, 2.0) < 1.0 ? ca : cb;
+      col += bc * (ringv + core * 0.9) * (1.0 - fb / 28.0);
+    }
+  }
+
+  // ---------------------------------------------------------- 6. white squiggles: polar sine tubes, in pieces
+  for (int w = 0; w < 2; w++) {
+    float fw = float(w);
+    float Rw = 0.17 + 0.17 * fw;
+    float n = 4.0 + 2.0 * fw;
+    float A = 0.035 + 0.01 * fw;
+    float ph = (w == 0 ? 1.0 : -1.0) * TAU * 2.0 * t / uLoop + fw;
+    vec2 qw = rot(ph) * q;
+    float a = atan(qw.y, qw.x);
+    float f = rr - (Rw + A * sin(n * a));
+    float grad = sqrt(1.0 + pow(A * n / max(rr, 0.02), 2.0));
+    float d = f / grad;
+    float tw = 0.011;
+    float tube = line(abs(d) - tw, 0.0028) + 0.25 * glow(abs(d) - tw, 160.0);
+    float inner = (1.0 - smoothstep(0.0, tw, abs(d))) * 0.12;
+    // keep only arcs: the squiggle comes in separate S-shaped pieces
+    float keep = smoothstep(-0.2, 0.2, sin(a * 3.0 + fw * 1.7 + TAU * t / uLoop));
+    col += vec3(0.95, 0.97, 1.0) * (tube + inner) * keep * smoothstep(0.08, 0.16, rr) * (0.85 + 0.4 * kick);
+  }
+
+  // ---------------------------------------------------------- 7. bokeh orbs
+  for (int i = 0; i < 6; i++) {
+    float fi = float(i);
+    float a = TAU * (hash1(fi + 11.0) + t / uLoop * (mod(fi, 2.0) < 1.0 ? 1.0 : -1.0));
+    vec2 bp = vec2(cos(a) * 0.36, sin(a * 2.0 + fi) * 0.42);
+    float br = 0.03 + 0.05 * hash1(fi + 4.0);
+    float d = length(uv - bp);
+    col += mix(P(3, bars), vec3(1.0), 0.4) * (1.0 - smoothstep(br * 0.6, br, d)) * 0.07;
+  }
+
+  col += mix(P(0, bars), vec3(1.0), 0.35) * exp(-rr * 32.0) * (0.35 + 0.5 * kick);
+
+  // ---------------------------------------------------------- beat, drop, tone
+  col *= 0.92 + 0.35 * kick;
+  // the build: the frame tightens and strobes on 16ths
+  col *= 1.0 + build * 0.6 * step(0.5, fract(beats * 4.0));
+  // the drop: everything goes monochrome silver, then colour floods back
+  float lum = dot(col, vec3(0.299, 0.587, 0.114));
+  col = mix(col, vec3(lum) * vec3(1.05, 1.07, 1.12) * 1.6, clamp(drop, 0.0, 1.0));
+  col = 1.0 - exp(-col * 1.25);
+  // vignette, grain
+  col *= 1.0 - 0.45 * smoothstep(0.35, 0.85, length(uv * vec2(1.2, 1.0)));
+  col += (hash(gl_FragCoord.xy + fract(t * 60.0) * 97.0) - 0.5) * 0.035;
+  o = vec4(clamp(col, 0.0, 1.0), 1.0);
+}`;
+
+const canvas = document.getElementById('c');
+const gl = canvas.getContext('webgl2', {preserveDrawingBuffer: true, antialias: false});
+const sh = (type, src) => {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+  return s;
+};
+const prog = gl.createProgram();
+gl.attachShader(prog, sh(gl.VERTEX_SHADER, VERT));
+gl.attachShader(prog, sh(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(prog);
+if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+gl.useProgram(prog);
+const buf = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+const loc = gl.getAttribLocation(prog, 'p');
+gl.enableVertexAttribArray(loc);
+gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+const U = (n) => gl.getUniformLocation(prog, n);
+const uRes = U('uRes'), uT = U('uT'), uLoop = U('uLoop'), uBeat = U('uBeat');
+
+function draw(t) {
+  const tt = ((t % DURATION) + DURATION) % DURATION;
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.uniform2f(uRes, canvas.width, canvas.height);
+  gl.uniform1f(uT, tt);
+  gl.uniform1f(uLoop, DURATION);
+  gl.uniform1f(uBeat, tt * BPM / 60);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.finish();
+}
+// capture contract: window.seek(seconds) draws that moment; ?render freezes the clock
+window.seek = (t) => draw(t);
+const params = new URLSearchParams(location.search);
+if (params.has('render')) draw(Number(params.get('t') || 0));
+else {
+  const t0 = performance.now();
+  const loop = (now) => {
+    draw((now - t0) / 1000);
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
+}
+window.READY = true;
+</script>
+</body>
+</html>
