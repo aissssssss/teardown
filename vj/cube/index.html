@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Cube Universe VJ</title>
+<style>html,body{margin:0;height:100%;background:#000;overflow:hidden}canvas{display:block;height:100vh;width:auto;margin:0 auto}</style>
+</head><body><canvas id="c" width="1080" height="1920"></canvas><script>
+// APOLLONIAN UNIVERSE: a closed world of spheres inside spheres. Space is folded into a repeating cell and inverted
+// in a sphere 8 times (p = -1 + 2*fract(p/2 + 1/2); p *= s / |p|^2); the distance to the result is ray-marched. The
+// orbit of each point colours it: pink pearls, gold arches, violet lattice. The camera drifts through the chambers,
+// the inversion strength breathes over the phrase and pulses on the kick, so the whole universe morphs to the beat.
+const BPM = 136, T0 = 0.046, DURATION = 57.8;
+window.DURATION = DURATION;
+const FRAG = `#version 300 es
+precision highp float;
+uniform vec2 R; uniform float T, B; out vec4 o;
+#define TAU 6.2831853
+vec4 orb;
+// pseudo-Kleinian: fold space into a box, invert in a sphere, repeat. Square portals inside square portals,
+// with organic fibres where the inversion bends them.
+const vec3 CS = vec3(0.808, 0.808, 1.167);
+float map(vec3 p, float s){
+  float k, f = 1.0; orb = vec4(1000.0);
+  for (int i = 0; i < 9; i++) {
+    p = 2.0 * clamp(p, -CS, CS) - p;
+    float r2 = dot(p, p);
+    orb = min(orb, vec4(abs(p), r2));
+    k = max(s / r2, 1.0);
+    p *= k; f *= k;
+  }
+  float rxy = length(p.xy);
+  return max(rxy - 0.02, abs(rxy * p.z) / length(p)) / f;
+}
+void main(){
+  vec2 uv = (2.0 * gl_FragCoord.xy - R) / R.y;
+  float kick = exp(-fract(B) * 6.0);
+  float s = 1.0 + 0.06 * sin(B * TAU / 64.0) + 0.015 * kick;           // the universe breathes and pulses
+  float tm = T * 0.22;
+  // the camera threads through the box's interior on a slow loop
+  vec3 ro = vec3(0.32 * cos(0.1 + 0.33 * tm), 0.25 * sin(0.37 * tm), 0.45 * cos(0.5 + 0.35 * tm));
+  vec3 ta = ro + vec3(cos(0.9 + 0.4 * tm), 0.35 * sin(0.27 * tm), sin(0.9 + 0.4 * tm));
+  float rl = 0.25 * cos(0.13 * T);
+  vec3 cw = normalize(ta - ro), cu = normalize(cross(cw, vec3(sin(rl), cos(rl), 0.0))), cv = cross(cu, cw);
+  vec3 rd = normalize(uv.x * cu + uv.y * cv + 1.6 * cw);
+  float t = 0.01, h, glow = 0.0;
+  for (int i = 0; i < 160; i++) { h = map(ro + rd * t, s); glow += exp(-h * 60.0) * 0.012; if (h < 0.00035 * t || t > 10.0) break; t += h; }
+  vec3 warm = vec3(1.0, 0.62, 0.36), teal = vec3(0.22, 0.42, 0.5);
+  vec3 fogc = mix(teal * 0.6, warm * 0.9, smoothstep(-0.3, 0.8, rd.y));
+  vec3 col = fogc;
+  if (t < 10.0) {
+    vec3 p = ro + rd * t;
+    vec4 tr = orb;
+    vec2 e = vec2(1.0, -1.0) * 0.0004 * t;
+    vec3 n = normalize(e.xyy * map(p + e.xyy, s) + e.yyx * map(p + e.yyx, s) + e.yxy * map(p + e.yxy, s) + e.xxx * map(p + e.xxx, s));
+    vec3 alb = mix(vec3(0.55, 0.6, 0.66), vec3(0.85, 0.7, 0.6), clamp(tr.w * 0.6, 0.0, 1.0));
+    float ao = clamp(tr.w * 1.5, 0.15, 1.0);
+    float key = clamp(dot(n, normalize(vec3(0.2, 1.0, -0.3))), 0.0, 1.0);
+    vec3 lit = alb * (warm * key * 1.4 + teal * (0.45 + 0.35 * n.y)) * ao;
+    // neon edges where the box fold leaves a thin trace
+    float edge = exp(-min(tr.x, tr.y) * 40.0);
+    lit += mix(vec3(1.0, 0.25, 0.8), vec3(1.0, 0.85, 0.3), 0.5 + 0.5 * sin(B * TAU / 16.0 + tr.z * 6.0)) * edge * (0.8 + 0.8 * kick);
+    col = mix(lit, fogc, 1.0 - exp(-1.2 * t));
+  }
+  col += warm * glow * 0.6;
+  col = pow(clamp(col, 0.0, 1.0), vec3(0.8));
+  col *= 1.0 - 0.35 * smoothstep(0.5, 1.6, length(uv * vec2(1.2, 1.0)));
+  o = vec4(col, 1.0);
+}`;
+const gl = document.getElementById('c').getContext('webgl2', {preserveDrawingBuffer: true});
+const sh = (t, src) => { const x = gl.createShader(t); gl.shaderSource(x, src); gl.compileShader(x); if (!gl.getShaderParameter(x, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(x)); return x; };
+const pr = gl.createProgram();
+gl.attachShader(pr, sh(gl.VERTEX_SHADER, '#version 300 es\nin vec2 v;void main(){gl_Position=vec4(v,0,1);}'));
+gl.attachShader(pr, sh(gl.FRAGMENT_SHADER, FRAG));
+gl.linkProgram(pr); gl.useProgram(pr);
+gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+const draw = (t) => {
+  gl.viewport(0, 0, 1080, 1920);
+  gl.uniform2f(gl.getUniformLocation(pr, 'R'), 1080, 1920);
+  gl.uniform1f(gl.getUniformLocation(pr, 'T'), t);
+  gl.uniform1f(gl.getUniformLocation(pr, 'B'), ((t - T0) * BPM) / 60);
+  gl.drawArrays(gl.TRIANGLES, 0, 3); gl.finish();
+};
+window.seek = draw;
+if (location.search.includes('render')) draw(0);
+else { const t0 = performance.now(); const f = (n) => { draw(((n - t0) / 1000) % DURATION); requestAnimationFrame(f); }; requestAnimationFrame(f); }
+window.READY = true;
+</script></body></html>
