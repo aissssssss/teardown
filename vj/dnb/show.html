@@ -26,7 +26,7 @@ float snare(){ return exp(-fract(B * 0.5 + 0.5) * 7.0); }
 vec3 key(int k){ float h = floor(B / 4.0) * 0.37; return hs(k == 0 ? vec3(0.45, 1.0, 0.1) : k == 1 ? vec3(0.1, 0.9, 1.0) : vec3(1.0, 0.15, 0.7), h * TAU); }
 
 // ------------------------------------------------------------ TORUS
-const float RM = 1.0, RT = 0.38;
+float RM = 1.0; const float RT = 0.38;
 float torus(vec3 p){ vec2 q = vec2(length(p.xz) - RM, p.y); return length(q) - RT; }
 mat3 tumble(){ float a = T * 0.35, b = 0.6 + 0.35 * sin(T * 0.23);
   mat3 rx = mat3(1, 0, 0, 0, cos(b), -sin(b), 0, sin(b), cos(b));
@@ -35,24 +35,24 @@ mat3 tumble(){ float a = T * 0.35, b = 0.6 + 0.35 * sin(T * 0.23);
 vec3 skin(vec3 p, vec3 n){
   // surface coordinates: u round the ring, v round the tube
   float u = atan(p.z, p.x), v = atan(p.y, length(p.xz) - RM);
-  vec2 g = vec2(u / TAU * 36.0, v / TAU * 12.0);
-  g.x += (mod(floor(g.y), 2.0) < 0.5 ? 1.0 : -1.0) * B * 0.25;   // alternate bands slide opposite ways round the ring
+  vec2 g = vec2(u / TAU * 36.0 * RM, v / TAU * 12.0);
+  g.x += (mod(floor(g.y), 2.0) < 0.5 ? 1.0 : -1.0) * B * 0.06;   // alternate bands slide opposite ways round the ring
   vec2 id = floor(g), f = fract(g) - 0.5;
   float sg = mod(id.x + id.y, 2.0) < 0.5 ? 1.0 : -1.0, h = hash(id);
-  f = rot(sg * B * PI * 0.25 * (h < 0.5 ? 1.0 : 0.0)) * f;
+  f = rot(sg * B * PI * 0.0625 * (h < 0.3 ? 1.0 : 0.0)) * f;
   float d = h < 0.33 ? abs(max(abs(f.x), abs(f.y)) - 0.3) : h < 0.66 ? abs(abs(f.x) + abs(f.y) - 0.32) : abs(length(f) - 0.28);
   vec3 col = key(h < 0.5 ? 0 : 2) * line(d, 0.07) * (0.6 + 0.6 * sin(sg * B * PI * 0.5 + h * TAU)) * 1.3;
   // four hexagon serpents orbiting the tube, two each way, so they cross
   for (int s = 0; s < 4; s++) {
     float fs = float(s);
-    float base = fs * PI * 0.5 + (mod(fs, 2.0) < 0.5 ? 1.0 : -1.0) * B * TAU / 16.0;
-    float da = mod(v - (base + 0.35 * sin(u * 5.0 - B * PI * 0.5 + fs)) + PI, TAU) - PI;
-    float seg = fract(u / TAU * 2.0 - T * 0.12 * (1.0 + 0.3 * fs) + fs * 0.25);
+    float base = fs * PI * 0.5 + (mod(fs, 2.0) < 0.5 ? 1.0 : -1.0) * B * TAU / 64.0;
+    float da = mod(v - (base + 0.35 * sin(u * 5.0 * RM - B * PI * 0.5 + fs)) + PI, TAU) - PI;
+    float seg = fract(u / TAU * 2.0 * RM - T * 0.12 * (1.0 + 0.3 * fs) + fs * 0.25);
     float w = 0.33 * pow(max(sin(PI * min(seg / 0.85, 1.0)), 0.0), 0.6) * step(seg, 0.85) + 1e-4;
     float vv = da / w;
     if (abs(vv) < 1.0) {
       float nz = sqrt(1.0 - vv * vv);
-      vec2 hp = vec2(u * 9.0, asin(vv) / (PI * 0.5) * 2.2 + B * 0.25 * (mod(fs, 2.0) < 0.5 ? 1.0 : -1.0));
+      vec2 hp = vec2(u * 9.0 * RM, asin(vv) / (PI * 0.5) * 2.2 + B * 0.25 * (mod(fs, 2.0) < 0.5 ? 1.0 : -1.0));
       vec2 rr = vec2(1.0, 1.7320508), ha = mod(hp, rr) - rr * 0.5, hb = mod(hp - rr * 0.5, rr) - rr * 0.5;
       vec2 gv = dot(ha, ha) < dot(hb, hb) ? ha : hb;
       vec2 hid = floor((hp - gv) * 4.0 + 0.5);
@@ -68,7 +68,7 @@ vec3 skin(vec3 p, vec3 n){
 vec3 eyeMandala(vec2 p){
   float r = length(p), a = atan(p.y, p.x);
   float ring = floor(r * 10.0), n = 6.0 + ring * 4.0;
-  float aa = a + (mod(ring, 2.0) < 0.5 ? 1.0 : -1.0) * B * 0.2;
+  float aa = a + (mod(ring, 2.0) < 0.5 ? 1.0 : -1.0) * B * 0.04;
   vec2 f = vec2((fract(aa / TAU * n) - 0.5) * 1.4, fract(r * 10.0) - 0.5);
   float x = f.x / 0.45, lid = 0.24 * (1.0 - x * x) * (0.3 + 0.7 * smoothstep(0.0, 0.1, abs(fract(B / 8.0 + ring * 0.13) - 0.05)));
   float eye = step(abs(x), 1.0) * line(abs(f.y) - lid, 0.03);
@@ -79,11 +79,14 @@ vec3 eyeMandala(vec2 p){
 vec3 torusScene(vec2 uv){
   // the camera starts inside the torus' tube (a curved tunnel), and CAM 0..1 carries it out through the wall
   float e = CAM * CAM * (3.0 - 2.0 * CAM);
+  RM = mix(6.0, 1.0, e);                         // a long, gently curved tube that tightens into the ring
   uv = rot(0.4 * sin(T * 0.3) * (1.0 - e)) * uv;
   mat3 M = tumble();
-  float phi = T * 0.45;
+  float phi = T * 0.3 / RM;
   vec3 pin = vec3(RM * cos(phi), 0.0, RM * sin(phi));
-  vec3 tin = vec3(RM * cos(phi + 0.2), 0.03 * sin(T * 0.7), RM * sin(phi + 0.2));
+  vec3 tin = vec3(RM * cos(phi + 0.22), 0.0, RM * sin(phi + 0.22));
+  vec3 rad = vec3(cos(phi + 0.22), 0.0, sin(phi + 0.22));
+  tin += (rad * cos(T * 0.5) + vec3(0.0, 1.0, 0.0) * sin(T * 0.5)) * 0.2;
   vec3 pout = M * vec3(0.0, 0.0, -5.0 + 0.3 * kick());
   vec3 ro = mix(pin, pout, e), ta = mix(tin, vec3(0.0), e);
   vec3 up = normalize(mix(vec3(0.0, 1.0, 0.0), M * vec3(0.0, 1.0, 0.0), e));
@@ -93,7 +96,7 @@ vec3 torusScene(vec2 uv){
   float lane = floor(uv.y * 40.0), hl = hash(vec2(lane, 1.0));
   col += vec3(1.0) * step(0.86, hl) * line(fract(uv.y * 40.0) - 0.5, 0.12) * smoothstep(0.85, 1.0, fract(uv.x * 0.6 - T * (1.5 + 2.0 * hl) + hl)) * 0.9 * e;
   float t = 0.0, d = 1.0;
-  for (int i = 0; i < 90; i++) { d = abs(torus(ro + rd * t)); if (d < 0.001 || t > 8.0) break; t += d; }
+  for (int i = 0; i < 140; i++) { d = abs(torus(ro + rd * t)); if (d < 0.001 || t > 40.0) break; t += d; }
   if (e > 0.5) {
     mat3 Mi = transpose(M);
     vec3 roW = Mi * ro, rdW = Mi * rd;
@@ -103,11 +106,11 @@ vec3 torusScene(vec2 uv){
     for (int i = 0; i < 60; i++) { vec3 q = N * (roW + rdW * tb); db = length(vec2(length(q.xz) - 1.55, q.y)) - 0.06; if (db < 0.002 || tb > 8.0) break; tb += db; }
     if (db < 0.002 && (tb < t || d > 0.01)) {
       vec3 q = N * (roW + rdW * tb);
-      float dash = step(0.35, fract(atan(q.z, q.x) / TAU * 64.0 - B * 0.5));
+      float dash = step(0.35, fract(atan(q.z, q.x) / TAU * 64.0 - B * 0.25));
       if (dash > 0.5) return mix(key(0), vec3(1.0), 0.2) * (0.8 + 0.6 * kick());
     }
   }
-  if (d < 0.001 && t < 8.0) {
+  if (d < 0.001 && t < 40.0) {
     vec3 p = ro + rd * t;
     vec3 cdir = vec3(normalize(p.xz).x, 0.0, normalize(p.xz).y);
     vec3 n = normalize(p - cdir * RM);

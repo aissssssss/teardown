@@ -4,15 +4,15 @@
 set -e
 cd /home/user/teardown
 O=/tmp/claude-0/dnbseg; mkdir -p $O
-D=0.7
+D=1.4
 SEGS=(
  "show.html 0 22.5 -"
- "dots2.html 22.5 33.66 circleopen"
- "lib-0.html 33.66 44.8 radial"
+ "dots2.html 22.5 33.66 dissolve"
+ "lib-0.html 33.66 44.8 dissolve"
  "show.html 44.8 55.95 fadewhite"
- "lib-2.html 55.95 67.1 zoomin"
- "lib-3.html 67.1 78.25 pixelize"
- "lib-1.html 78.25 83.8 circleclose"
+ "lib-2.html 55.95 67.1 dissolve"
+ "lib-3.html 67.1 78.25 dissolve"
+ "lib-1.html 78.25 83.8 dissolve"
  "kifs.html 83.8 89.4 dissolve"
  "show.html 89.4 105.2 fadewhite"
 )
